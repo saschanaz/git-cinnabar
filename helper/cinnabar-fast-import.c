@@ -12,6 +12,7 @@ static void start_packfile();
 #include "sha1-array.h"
 #include "strslice.h"
 #include "tree-walk.h"
+#include <time.h>
 
 // Including tag.h conflicts with fast-import.c, so manually define what
 // we use.
@@ -564,6 +565,11 @@ void hg_file_store(struct hg_file *file, struct hg_file *reference)
 	file->content_oe = find_object(&oid);
 }
 
+uint64_t num_stores = 0;
+uint64_t num_delta_stores = 0;
+uint64_t time_stores = 0;
+uint64_t time_delta_stores = 0;
+
 static void store_file(struct rev_chunk *chunk)
 {
 	static struct hg_file last_file;
@@ -571,6 +577,10 @@ static void store_file(struct rev_chunk *chunk)
 	struct strbuf data = STRBUF_INIT;
 	struct rev_diff_part diff;
 	size_t last_end = 0;
+
+	fprintf(stderr, "stores: %ld / %ld\n", num_delta_stores, num_stores);
+	fprintf(stderr, "stores: %ld / %ld\n", time_delta_stores, time_stores);
+	die("the end");
 
 	if (is_empty_hg_file(chunk->node))
 		return;
@@ -691,6 +701,11 @@ static void store_manifest(struct rev_chunk *chunk)
 	size_t last_end = 0;
 	struct strslice slice;
 	struct manifest_line line;
+	struct timespec t0, t1;
+	uint64_t dt;
+	int use_delta = 1;
+
+	clock_gettime(CLOCK_MONOTONIC, &t0);
 
 	if (!last_manifest) {
 		last_manifest = new_branch("refs/cinnabar/manifests");
@@ -718,6 +733,7 @@ static void store_manifest(struct rev_chunk *chunk)
 		load_tree(&last_manifest->branch_tree);
 		strbuf_reset(&last_manifest_content);
 		strbuf_addbuf(&last_manifest_content, generate_manifest(note));
+		use_delta = 0;
 	}
 
 	// Start with the same allocation size as last manifest. (-1 before
@@ -834,6 +850,15 @@ static void store_manifest(struct rev_chunk *chunk)
 	if ((cinnabar_check & CHECK_MANIFESTS) &&
 	    !check_manifest(&last_manifest->oid, NULL))
 		die("sha1 mismatch for node %s", sha1_to_hex(chunk->node->hash));
+	clock_gettime(CLOCK_MONOTONIC, &t1);
+
+	num_stores++;
+	dt = (t1.tv_sec - t0.tv_sec) * 1000000000 + t1.tv_nsec - t0.tv_nsec;
+	time_stores += dt;
+	if (use_delta) {
+		num_delta_stores++;
+		time_delta_stores += dt;
+	}
 	return;
 
 malformed:
